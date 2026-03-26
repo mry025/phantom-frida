@@ -775,17 +775,32 @@ def create_vala_wrapper(frida_dir: Path, arch: str):
     wrapper_name = f"frida-{arch}-valac"
     wrapper_path = build_dir / wrapper_name
     
-    # Create wrapper script
+    # Create wrapper script that calls system valac
+    # Use absolute path to ensure it works regardless of PATH
     wrapper_content = f"""#!/bin/sh
-# Wrapper script for valac cross-compilation
-exec valac "$@"
+exec /usr/bin/valac "$@"
 """
     
     wrapper_path.write_text(wrapper_content)
     wrapper_path.chmod(0o755)
     
-    # Add to PATH by creating a setup snippet
     log(f"  Created valac wrapper: {wrapper_path}", "INFO")
+    
+    # Verify the wrapper works
+    import subprocess
+    try:
+        result = subprocess.run(
+            [str(wrapper_path), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            log(f"  Valac wrapper verified: {result.stdout.strip()}", "OK")
+        else:
+            log(f"  Valac wrapper failed: {result.stderr.strip()}", "WARN")
+    except Exception as e:
+        log(f"  Could not verify valac wrapper: {e}", "WARN")
 
 
 def configure_arch(frida_dir: Path, arch: str, ndk_path: Path):
