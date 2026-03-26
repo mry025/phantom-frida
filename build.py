@@ -681,23 +681,210 @@ def apply_binary_patches(binary_path: Path, custom_name: str, extended: bool = F
 # Build
 # ============================================================================
 
+def ensure_configure(frida_dir: Path):
+    """Ensure configure script exists, generate if needed.
+    
+    Returns:
+        True: configure script exists (use ./configure)
+        False: meson build (use meson setup)
+        None: Makefile-only build (skip configure, use make directly)
+    """
+    configure_script = frida_dir / "configure"
+    
+    # Debug: list what's in the frida directory
+    log(f"  Checking build system in {frida_dir}...", "INFO")
+    try:
+        root_files = [f.name for f in frida_dir.iterdir() if f.is_file()][:20]
+        log(f"  Root files: {', '.join(root_files)}", "INFO")
+    except Exception as e:
+        log(f"  Could not list directory: {e}", "WARN")
+    
+    # First check if this is a meson-only build (Frida 15.2+)
+    # Check multiple possible locations for meson.build
+    meson_build_paths = [
+        frida_dir / "meson.build",
+        frida_dir / "releng" / "meson.build",
+    ]
+    
+    has_meson = any(p.exists() for p in meson_build_paths)
+    if has_meson:
+        log("  This is a meson-based build (Frida 15.2+)", "INFO")
+        log("  configure script not needed for meson builds", "INFO")
+        return False
+    
+    # Check for Makefile (indicates make-based build)
+    has_makefile = (frida_dir / "Makefile").exists() or (frida_dir / "makefile").exists()
+    if has_makefile:
+        log("  Makefile found, this is a make-based build", "INFO")
+        if not configure_script.exists():
+            log("  No configure script found, using Makefile directly", "INFO")
+            return None  # Special value: Makefile-only build
+    
+    if configure_script.exists():
+        log("  configure script found", "OK")
+        return True
+    
+    log("  configure script not found, attempting to generate...", "STEP")
+    
+    # Try autogen.sh first
+    autogen = frida_dir / "autogen.sh"
+    if autogen.exists():
+        log("  Running autogen.sh...", "STEP")
+        result = subprocess.run(
+            ["bash", "./autogen.sh"],
+            cwd=str(frida_dir),
+            capture_output=True,
+            text=True
+        )
+        if result.returncode == 0 and configure_script.exists():
+            log("  configure generated via autogen.sh", "OK")
+            return True
+        else:
+            log(f"  autogen.sh failed: {result.stderr[:200]}", "WARN")
+    
+    # Try autoreconf as fallback
+    log("  Trying autoreconf...", "STEP")
+    result = subprocess.run(
+        ["autoreconf", "-fi"],
+        cwd=str(frida_dir),
+        capture_output=True,
+        text=True
+    )
+    if result.returncode == 0 and configure_script.exists():
+        log("  configure generated via autoreconf", "OK")
+        return True
+    else:
+        log(f"  autoreconf failed: {result.stderr[:200]}", "WARN")
+    
+    log("  Failed to generate configure script", "ERROR")
+    return None
+
+
 def configure_arch(frida_dir: Path, arch: str, ndk_path: Path):
     log(f"Configuring for {arch}...", "STEP")
-    run(
-        f"./configure --host={arch}",
-        cwd=str(frida_dir),
-        env={"ANDROID_NDK_ROOT": str(ndk_path)},
-    )
+    
+    # Check if configure exists and generate if needed
+    has_configure = ensure_configure(frida_dir)
+    
+    if has_configure:
+        # Traditional configure + make build
+        run(
+            f"./configure --host={arch}",
+            cwd=str(frida_dir),
+            env={"ANDROID_NDK_ROOT": str(ndk_path)},
+        )
+    elif has_configure is False:
+        # Meson-only build (Frida 16+)
+        build_dir = frida_dir / "build"
+        build_dir.mkdir(exist_ok=True)
+        
+        # Map arch to meson cross-file
+        arch_map = {
+            "android-arm64": "aarch64-linux-android",
+            "android-arm": "arm-linux-androideabi",
+            "android-x86_64": "x86_64-linux-android",
+            "android-x86": "i686-linux-android",
+        }
+        
+        cross_arch = arch_map.get(arch, arch)
+        cross_file = frida_dir / "releng" / f"{cross_arch}.txt"
+        
+        if not cross_file.exists():
+            # Try to find any cross file
+            releng_dir = frida_dir / "releng"
+            if releng_dir.exists():
+                cross_files = list(releng_dir.glob("*android*.txt"))
+                if cross_files:
+                    cross_file = cross_files[0]
+                    log(f"  Using cross file: {cross_file.name}", "INFO")
+        
+        if cross_file.exists():
+            run(
+                f"meson setup build --cross-file {cross_file}",
+                cwd=str(frida_dir),
+                env={"ANDROID_NDK_ROOT": str(ndk_path)},
+            )
+        else:
+            log(f"  Cross file not found for {arch}, trying default configure", "WARN")
+            run(
+                f"./configure --host={arch}",
+                cwd=str(frida_dir),
+                env={"ANDROID_NDK_ROOT": str(ndk_path)},
+            )
+    elif has_configure is None:
+        # Makefile-only build (Frida 15.2 and older)
+        # No configure script, just use make directly
+        log("  Using Makefile-based build (no configure needed)", "INFO")
+        # No configuration step needed, make will handle it
+    else:
+        log("Cannot configure: no configure script and not a meson build", "ERROR")
+        sys.exit(1)
 
 
-def build_frida(frida_dir: Path, ndk_path: Path):
+def build_frida(frida_dir: Path, ndk_path: Path, arch: str = None):
     cpus = os.cpu_count() or 4
     log(f"Building ({cpus} threads)...", "STEP")
-    run(
-        f"make -j{cpus}",
-        cwd=str(frida_dir),
-        env={"ANDROID_NDK_ROOT": str(ndk_path)},
-    )
+    
+    # Check if this is a meson build (has build directory with meson-private)
+    meson_build_dir = frida_dir / "build" / "meson-private"
+    if meson_build_dir.exists():
+        # Meson build
+        run(
+            f"ninja -C build -j{cpus}",
+            cwd=str(frida_dir),
+            env={"ANDROID_NDK_ROOT": str(ndk_path)},
+        )
+        
+        # After meson build, list all generated binaries for debugging
+        log("  Build complete. Listing generated binaries...", "INFO")
+        build_dir = frida_dir / "build"
+        if build_dir.exists():
+            binary_count = 0
+            for root, dirs, files in os.walk(build_dir):
+                for f in files:
+                    if f.endswith(('.so', '-server', '-server-raw', '-gadget', '-agent')) or \
+                       (f.startswith('lib') and not f.endswith('.a')):
+                        fpath = Path(root) / f
+                        if fpath.stat().st_size > 10000:  # Only show files > 10KB
+                            rel_path = fpath.relative_to(frida_dir)
+                            log(f"    {rel_path} ({fpath.stat().st_size:,} bytes)", "INFO")
+                            binary_count += 1
+            if binary_count == 0:
+                log("    No large binaries found, listing all files in build/subprojects/", "WARN")
+                subprojects_dir = build_dir / "subprojects"
+                if subprojects_dir.exists():
+                    for root, dirs, files in os.walk(subprojects_dir):
+                        for f in files:
+                            fpath = Path(root) / f
+                            if fpath.stat().st_size > 1000:
+                                rel_path = fpath.relative_to(frida_dir)
+                                log(f"    {rel_path} ({fpath.stat().st_size:,} bytes)", "INFO")
+    else:
+        # Make build (older Frida versions like 15.2.2)
+        # Check if there's a Makefile in root
+        has_makefile = (frida_dir / "Makefile").exists() or (frida_dir / "makefile").exists()
+        if has_makefile:
+            log("  Using make with root Makefile", "INFO")
+            
+            # Map architecture to Makefile target
+            arch_to_target = {
+                "android-arm64": "core-android-arm64",
+                "android-arm": "core-android-arm",
+                "android-x86_64": "core-android-x86_64",
+                "android-x86": "core-android-x86",
+            }
+            
+            target = arch_to_target.get(arch, "core-android-arm64")
+            log(f"  Building target: {target}", "INFO")
+            
+            run(
+                f"make -j{cpus} {target}",
+                cwd=str(frida_dir),
+                env={"ANDROID_NDK_ROOT": str(ndk_path)},
+            )
+        else:
+            log("  No Makefile or meson build found, cannot build", "ERROR")
+            sys.exit(1)
 
 
 # ============================================================================
@@ -712,17 +899,75 @@ def collect_artifacts(frida_dir: Path, arch: str, custom_name: str,
     arch_short = arch.replace("android-", "")
 
     def find_artifact(subdir: str, patterns: list[str]) -> Path | None:
-        base = frida_dir / "build" / "subprojects" / "frida-core" / subdir
-        for pattern in patterns:
-            candidate = base / pattern
-            if candidate.exists():
-                return candidate
-        # List directory for debugging
-        if base.exists():
-            log(f"    Looking in {base}:", "INFO")
-            for f in sorted(base.iterdir()):
-                if f.is_file() and f.stat().st_size > 1000:
-                    log(f"      {f.name} ({f.stat().st_size:,} bytes)", "INFO")
+        # Try multiple possible build output locations for meson builds
+        # Meson typically outputs to build/subprojects/<project>/<subdir>/
+        search_paths = [
+            # Primary meson output path
+            frida_dir / "build" / "subprojects" / "frida-core" / subdir,
+            # Meson output with custom name (after patches)
+            frida_dir / "build" / "subprojects" / f"{custom_name}-core" / subdir,
+            # Direct build output
+            frida_dir / "build" / subdir,
+            # Source directory (some builds output next to source)
+            frida_dir / "subprojects" / "frida-core" / subdir,
+            frida_dir / "subprojects" / f"{custom_name}-core" / subdir,
+            # Fallback to root build dir
+            frida_dir / "build",
+        ]
+        
+        # First pass: exact pattern match
+        for base in search_paths:
+            for pattern in patterns:
+                candidate = base / pattern
+                if candidate.exists():
+                    log(f"  Found {pattern} in {base.relative_to(frida_dir)}", "OK")
+                    return candidate
+        
+        # Second pass: recursive search in most likely locations
+        likely_paths = [
+            frida_dir / "build" / "subprojects" / "frida-core",
+            frida_dir / "build" / "subprojects" / f"{custom_name}-core",
+            frida_dir / "build",
+        ]
+        
+        log(f"  Searching for artifacts...", "INFO")
+        for base in likely_paths:
+            if base.exists():
+                log(f"    Looking in {base.relative_to(frida_dir)}:", "INFO")
+                try:
+                    for f in sorted(base.iterdir()):
+                        if f.is_file() and f.stat().st_size > 1000:
+                            log(f"      {f.name} ({f.stat().st_size:,} bytes)", "INFO")
+                except Exception as e:
+                    log(f"      Could not list: {e}", "WARN")
+                
+                # Also check subdirectories
+                for pattern in patterns:
+                    for root, dirs, files in os.walk(base):
+                        if pattern in files:
+                            found = Path(root) / pattern
+                            log(f"    Found {pattern} at {found.relative_to(frida_dir)}", "OK")
+                            return found
+        
+        # Third pass: comprehensive recursive search
+        log(f"  Doing comprehensive recursive search in build/...", "INFO")
+        build_dir = frida_dir / "build"
+        if build_dir.exists():
+            for root, dirs, files in os.walk(build_dir):
+                for pattern in patterns:
+                    if pattern in files:
+                        found = Path(root) / pattern
+                        log(f"    Found {pattern} at {found.relative_to(frida_dir)}", "OK")
+                        return found
+        
+        # List what we actually have in the expected location
+        expected_server_dir = frida_dir / "build" / "subprojects" / "frida-core" / "server"
+        if expected_server_dir.exists():
+            log(f"  Contents of expected server directory:", "INFO")
+            for f in expected_server_dir.iterdir():
+                if f.is_file():
+                    log(f"    {f.name} ({f.stat().st_size:,} bytes)", "INFO")
+        
         return None
 
     def save_artifact(src: Path, out_name: str):
@@ -953,14 +1198,14 @@ Detection vectors covered:
 
         # First build
         log("First build...", "STEP")
-        build_frida(frida_dir, ndk_path)
+        build_frida(frida_dir, ndk_path, arch)
 
         # Post-build patches (frida_agent_main appears only after first build)
         apply_post_build_patches(frida_dir, custom_name)
 
         # Second build (incremental — only recompiles files with patched symbol)
         log("Second build (incremental)...", "STEP")
-        build_frida(frida_dir, ndk_path)
+        build_frida(frida_dir, ndk_path, arch)
 
         # Collect and binary-patch artifacts
         collect_artifacts(frida_dir, arch, custom_name, version, output_dir, args.extended)
