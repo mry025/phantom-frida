@@ -801,12 +801,30 @@ exec /usr/bin/valac "$@"
             log(f"  Valac wrapper failed: {result.stderr.strip()}", "WARN")
     except Exception as e:
         log(f"  Could not verify valac wrapper: {e}", "WARN")
+    
+    # Also check and modify cross-compile file if it exists
+    cross_file = build_dir / f"frida-{arch}.txt"
+    if cross_file.exists():
+        log(f"  Checking cross file: {cross_file}", "INFO")
+        content = cross_file.read_text()
+        if 'valac' not in content:
+            # Add valac to [binaries] section
+            if '[binaries]' in content:
+                content = content.replace('[binaries]', '[binaries]\nvalac = \'{}\''.format(str(wrapper_path)))
+                cross_file.write_text(content)
+                log(f"  Added valac to cross file", "OK")
+            else:
+                log(f"  Cross file has no [binaries] section", "WARN")
+        else:
+            log(f"  Cross file already contains valac config", "OK")
+    else:
+        log(f"  Cross file not found yet: {cross_file}", "INFO")
 
 
 def configure_arch(frida_dir: Path, arch: str, ndk_path: Path):
     log(f"Configuring for {arch}...", "STEP")
     
-    # Create valac wrapper for meson build
+    # Create valac wrapper first
     create_vala_wrapper(frida_dir, arch)
     
     # Check if configure exists and generate if needed
@@ -865,6 +883,31 @@ def configure_arch(frida_dir: Path, arch: str, ndk_path: Path):
     else:
         log("Cannot configure: no configure script and not a meson build", "ERROR")
         sys.exit(1)
+    
+    # After configuration, check and update the generated cross-compile file
+    # This is needed because Frida SDK generates cross files during configure
+    build_dir = frida_dir / "build"
+    cross_file = build_dir / f"frida-{arch}.txt"
+    
+    if cross_file.exists():
+        log(f"  Checking generated cross file: {cross_file}", "INFO")
+        content = cross_file.read_text()
+        
+        # Find the wrapper path
+        wrapper_path = build_dir / f"frida-{arch}-valac"
+        
+        if 'valac' not in content:
+            # Add valac to [binaries] section
+            if '[binaries]' in content:
+                content = content.replace('[binaries]', '[binaries]\nvalac = \'{}\''.format(str(wrapper_path)))
+                cross_file.write_text(content)
+                log(f"  Added valac to cross file", "OK")
+            else:
+                log(f"  Cross file has no [binaries] section", "WARN")
+        else:
+            log(f"  Cross file already contains valac config", "OK")
+    else:
+        log(f"  Generated cross file not found: {cross_file}", "INFO")
 
 
 def build_frida(frida_dir: Path, ndk_path: Path, arch: str = None):
