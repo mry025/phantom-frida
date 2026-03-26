@@ -910,9 +910,49 @@ def configure_arch(frida_dir: Path, arch: str, ndk_path: Path):
         log(f"  Generated cross file not found: {cross_file}", "INFO")
 
 
+def ensure_cross_file_valac(frida_dir: Path, arch: str):
+    """Ensure cross-compile file contains valac configuration.
+    
+    This must be called AFTER Frida SDK generates cross files but BEFORE
+    meson is invoked for subprojects like frida-core.
+    """
+    build_dir = frida_dir / "build"
+    cross_file = build_dir / f"frida-{arch}.txt"
+    
+    if not cross_file.exists():
+        log(f"  Cross file not found yet: {cross_file}", "WARN")
+        return False
+    
+    wrapper_path = build_dir / f"frida-{arch}-valac"
+    if not wrapper_path.exists():
+        log(f"  Valac wrapper not found: {wrapper_path}", "WARN")
+        return False
+    
+    content = cross_file.read_text()
+    
+    if 'valac' not in content:
+        # Add valac to [binaries] section
+        if '[binaries]' in content:
+            content = content.replace('[binaries]', '[binaries]\nvalac = \'{}\''.format(str(wrapper_path)))
+            cross_file.write_text(content)
+            log(f"  Added valac to cross file: {cross_file}", "OK")
+            return True
+        else:
+            log(f"  Cross file has no [binaries] section", "WARN")
+            return False
+    else:
+        log(f"  Cross file already contains valac", "OK")
+        return True
+
+
 def build_frida(frida_dir: Path, ndk_path: Path, arch: str = None):
     cpus = os.cpu_count() or 4
     log(f"Building ({cpus} threads)...", "STEP")
+    
+    # For Makefile builds, ensure cross file has valac before make starts
+    # This is critical because make will invoke meson for subprojects
+    if arch:
+        ensure_cross_file_valac(frida_dir, arch)
     
     # Check if this is a meson build (has build directory with meson-private)
     meson_build_dir = frida_dir / "build" / "meson-private"
