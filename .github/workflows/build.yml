@@ -56,7 +56,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential curl git python3 unzip libglib2.0-dev libglib2.0-dev-bin
+          sudo apt-get install -y build-essential curl git python3 unzip libglib2.0-dev libglib2.0-dev-bin valac
 
       - name: Cache NDK
         uses: actions/cache@v4
