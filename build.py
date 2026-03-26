@@ -776,13 +776,14 @@ def create_vala_wrapper(frida_dir: Path, arch: str):
     wrapper_path = build_dir / wrapper_name
     
     # Create wrapper script that calls system valac
-    # Use absolute path to ensure it works regardless of PATH
+    # Use /usr/bin/env for better portability
     wrapper_content = f"""#!/bin/sh
-exec /usr/bin/valac "$@"
+# Vala compiler wrapper for {arch} cross-compilation
+exec /usr/bin/env valac "$@"
 """
     
     wrapper_path.write_text(wrapper_content)
-    wrapper_path.chmod(0o755)
+    wrapper_path.chmod(0o755)  # rwxr-xr-x
     
     log(f"  Created valac wrapper: {wrapper_path}", "INFO")
     
@@ -799,8 +800,50 @@ exec /usr/bin/valac "$@"
             log(f"  Valac wrapper verified: {result.stdout.strip()}", "OK")
         else:
             log(f"  Valac wrapper failed: {result.stderr.strip()}", "WARN")
+            # Try direct valac call
+            try:
+                result2 = subprocess.run(
+                    ["/usr/bin/valac", "--version"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if result2.returncode == 0:
+                    log(f"  System valac works: {result2.stdout.strip()}", "INFO")
+                    # Update wrapper to use absolute path
+                    wrapper_content = f"""#!/bin/sh
+# Vala compiler wrapper for {arch} cross-compilation (absolute path)
+exec /usr/bin/valac "$@"
+"""
+                    wrapper_path.write_text(wrapper_content)
+                    log(f"  Updated wrapper to use absolute path", "INFO")
+                else:
+                    log(f"  System valac also failed", "ERROR")
+            except Exception as e2:
+                log(f"  System valac check failed: {e2}", "ERROR")
     except Exception as e:
         log(f"  Could not verify valac wrapper: {e}", "WARN")
+        # Fallback: try to find valac
+        try:
+            result = subprocess.run(
+                ["which", "valac"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                valac_path = result.stdout.strip()
+                log(f"  Found valac at: {valac_path}", "INFO")
+                wrapper_content = f"""#!/bin/sh
+# Vala compiler wrapper for {arch} cross-compilation (found path)
+exec {valac_path} "$@"
+"""
+                wrapper_path.write_text(wrapper_content)
+                log(f"  Updated wrapper with found valac path", "INFO")
+            else:
+                log(f"  valac not found in PATH", "ERROR")
+        except Exception as e2:
+            log(f"  Could not find valac: {e2}", "ERROR")
     
     # Also check and modify cross-compile file if it exists
     cross_file = build_dir / f"frida-{arch}.txt"
