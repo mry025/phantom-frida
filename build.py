@@ -503,13 +503,14 @@ def apply_targeted_patches(frida_dir: Path, custom_name: str, frida_major: int):
             log(f"  SELinux: {old} -> {new} ({count})", "OK")
 
     # --- Build system files ---
+    # NOTE: Makefile.linux.mk is in frida root, not frida-core
     targets = {
         "server_meson": core_dir / "server" / "meson.build",
         "compat_build": core_dir / "compat" / "build.py",
         "core_meson": core_dir / "meson.build",
         "gadget_meson": core_dir / "lib" / "gadget" / "meson.build",
         "agent_meson": core_dir / "lib" / "agent" / "meson.build",
-        "makefile_linux": core_dir / "Makefile.linux.mk",
+        "makefile_linux": frida_dir / "Makefile.linux.mk",
     }
 
     for target_name, target_file in targets.items():
