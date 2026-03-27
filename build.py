@@ -751,11 +751,16 @@ def collect_artifacts(frida_dir: Path, arch: str, custom_name: str,
     arch_short = arch.replace("android-", "")
 
     def find_artifact(subdir: str, patterns: list[str]) -> Path | None:
-        # Frida 16.x: build/frida-core/subdir
-        # Frida 17.x: build/subprojects/frida-core/subdir
+        # Multiple possible locations for Frida build artifacts:
+        # 1. build/frida-{arch}/{subdir}/ - installed artifacts (final output)
+        # 2. build/tmp-{arch}/frida-core/{subdir}/ - build temp dir (16.x)
+        # 3. build/subprojects/frida-core/{subdir}/ - subprojects layout (17.x)
+        # 4. build/frida-core/{subdir}/ - legacy layout
         bases = [
+            frida_dir / "build" / f"frida-{arch}" / subdir,  # installed artifacts
+            frida_dir / "build" / f"tmp-{arch}" / "frida-core" / subdir,  # 16.x build temp
             frida_dir / "build" / "subprojects" / "frida-core" / subdir,  # 17.x
-            frida_dir / "build" / "frida-core" / subdir,  # 16.x
+            frida_dir / "build" / "frida-core" / subdir,  # 16.x fallback
         ]
         for base in bases:
             if not base.exists():
@@ -785,12 +790,21 @@ def collect_artifacts(frida_dir: Path, arch: str, custom_name: str,
         os.chmod(out_bin, 0o755)
 
     # --- Server ---
-    server = find_artifact("server", [
+    # Server is installed to build/frida-{arch}/bin/ after make
+    server = find_artifact("bin", [
         f"{custom_name}-server",
         f"{custom_name}-server-raw",
         "frida-server",
         "frida-server-raw",
     ])
+    # Also check server subdirectory in build temp dir
+    if not server:
+        server = find_artifact("server", [
+            f"{custom_name}-server",
+            f"{custom_name}-server-raw",
+            "frida-server",
+            "frida-server-raw",
+        ])
     if server:
         log(f"  Server: {server.name}", "OK")
         apply_binary_patches(server, custom_name, extended)
@@ -811,12 +825,20 @@ def collect_artifacts(frida_dir: Path, arch: str, custom_name: str,
         apply_binary_patches(agent, custom_name, extended)
 
     # --- Gadget .so ---
-    gadget = find_artifact("lib/gadget", [
+    # Gadget is installed to lib/ajeossida/{32,64}/ or lib/gadget/
+    gadget = find_artifact(f"lib/{custom_name}/{64 if arch_short == 'arm64' else 32}", [
         f"lib{custom_name}-gadget.so",
         f"lib{custom_name}-gadget-modulated.so",
         "libfrida-gadget.so",
         "libfrida-gadget-modulated.so",
     ])
+    if not gadget:
+        gadget = find_artifact("lib/gadget", [
+            f"lib{custom_name}-gadget.so",
+            f"lib{custom_name}-gadget-modulated.so",
+            "libfrida-gadget.so",
+            "libfrida-gadget-modulated.so",
+        ])
     if gadget:
         log(f"  Gadget: {gadget.name}", "OK")
         apply_binary_patches(gadget, custom_name, extended)
