@@ -1107,9 +1107,12 @@ endian = 'little'
             log("  Starting make with valac workaround...", "INFO")
             
             # Create a wrapper script that modifies cross file before each meson call
+            # AND fixes the ninja target name issue
             make_wrapper = build_dir / "make-with-valac-fix.sh"
             make_wrapper_content = f"""#!/bin/bash
-# Wrapper script to ensure valac is in cross file before meson runs
+# Wrapper script to:
+# 1. Ensure valac is in cross file before meson runs
+# 2. Fix ninja target names for Frida 15.x
 
 # Function to fix cross file
 fix_cross_file() {{
@@ -1125,8 +1128,81 @@ fix_cross_file() {{
     fi
 }}
 
+# Function to fix ninja command arguments
+# Frida 15.x uses file paths as ninja targets, but meson expects target names
+fix_ninja_args() {{
+    local args=("$@")
+    local fixed_args=()
+    
+    for arg in "${{args[@]}}"; do
+        # Convert file paths to target names
+        if [[ "$arg" == lib/agent/*.so ]]; then
+            # Extract target name from path
+            target_name=$(basename "$arg" .so)
+            fixed_args+=("$target_name")
+            echo "[FIX] Ninja target: $arg -> $target_name"
+        elif [[ "$arg" == src/* ]]; then
+            # Keep src/ targets as-is (they're usually correct)
+            fixed_args+=("$arg")
+        else
+            fixed_args+=("$arg")
+        fi
+    done
+    
+    # Run ninja with fixed arguments
+    ninja -C "${{NINJA_BUILD_DIR:-.}}" "${{fixed_args[@]}}"
+}}
+
 # Fix cross file before starting
 fix_cross_file
+
+# Check if we need to override ninja
+if command -v ninja &> /dev/null; then
+    # Create a ninja wrapper in the build directory
+    ninja_wrapper="{str(build_dir)}/ninja-wrapper.sh"
+    cat > "$ninja_wrapper" << 'NINJA_WRAPPER_EOF'
+#!/bin/bash
+# Ninja wrapper to fix target names
+
+# Parse arguments
+build_dir=""
+targets=()
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -C)
+            build_dir="$2"
+            shift 2
+            ;;
+        *)
+            targets+=("$1")
+            shift
+            ;;
+    esac
+done
+
+# Fix target names
+fixed_targets=()
+for target in "${{targets[@]}}"; do
+    if [[ "$target" == lib/agent/*.so ]]; then
+        # Extract target name from path
+        target_name=$(basename "$target" .so)
+        fixed_targets+=("$target_name")
+        echo "[NINJA WRAPPER] Fixed target: $target -> $target_name" >&2
+    else
+        fixed_targets+=("$target")
+    fi
+done
+
+# Run ninja with fixed targets
+exec ninja -C "$build_dir" "${{fixed_targets[@]}}"
+NINJA_WRAPPER_EOF
+    chmod +x "$ninja_wrapper"
+    echo "[FIX] Created ninja wrapper: $ninja_wrapper"
+    
+    # Add build directory to PATH so our ninja wrapper is found first
+    export PATH="{str(build_dir)}:$PATH"
+fi
 
 # Run make with original arguments
 exec make "$@"
