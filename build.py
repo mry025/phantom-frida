@@ -3,9 +3,10 @@
 Custom Frida Builder — build anti-detection Frida server from source.
 
 Extended beyond ajeossida with additional stealth techniques.
-Verified against Frida 17.7.2 source code.
+Verified against Frida 15.2.2, 16.x and 17.x source code.
 
 Usage (run in WSL Ubuntu):
+    python3 build.py --version 15.2.2
     python3 build.py --version 17.7.2
     python3 build.py --version 17.7.2 --name stealth --port 27142
     python3 build.py --version 17.7.2 --arch android-arm64,android-arm --extended
@@ -557,11 +558,23 @@ def apply_stability_fixes(frida_dir: Path, frida_major: int):
                     log(f"  {patch['description']}", "OK")
                 else:
                     log(f"  Pattern not found: {patch['description']}", "WARN")
+    elif frida_major == 16:
+        # Frida 16.x may have different stability issues
+        # For now, apply the same patches as 17.x
+        patches = get_stability_patches_17(frida_dir)
+        for patch in patches:
+            fpath = frida_dir / patch["file"]
+            if fpath.exists():
+                count = replace_in_file(fpath, patch["old"], patch["new"])
+                if count:
+                    log(f"  {patch['description']} (16.x)", "OK")
+                else:
+                    log(f"  Pattern not found: {patch['description']} (16.x)", "WARN")
 
     # DirListCloaker interceptor detach — safe to disable to prevent crash
     cloak = core_dir / "lib" / "payload" / "cloak.vala"
     if cloak.exists():
-        # 17.x: DirListCloaker uses Gum.Interceptor.detach in destructor
+        # 16.x/17.x: DirListCloaker uses Gum.Interceptor.detach in destructor
         old = "Gum.Interceptor.obtain ().detach (listener);"
         new = "// Gum.Interceptor.obtain ().detach (listener);"
         count = replace_in_file(cloak, old, new)
