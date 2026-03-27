@@ -763,9 +763,6 @@ def ensure_configure(frida_dir: Path):
 def configure_arch(frida_dir: Path, arch: str, ndk_path: Path):
     log(f"Configuring for {arch}...", "STEP")
     
-    # Create valac wrapper first
-    create_vala_wrapper(frida_dir, arch)
-    
     # Check if configure exists and generate if needed
     has_configure = ensure_configure(frida_dir)
     
@@ -832,15 +829,16 @@ def configure_arch(frida_dir: Path, arch: str, ndk_path: Path):
         log(f"  Checking generated cross file: {cross_file}", "INFO")
         content = cross_file.read_text()
         
-        # Find the wrapper path
-        wrapper_path = build_dir / f"frida-{arch}-valac"
+        # Use system valac directly
+        valac_path = "/usr/bin/valac"
         
         if 'valac' not in content:
             # Add valac to [binaries] section
             if '[binaries]' in content:
-                content = content.replace('[binaries]', '[binaries]\nvalac = \'{}\''.format(str(wrapper_path)))
+                content = content.replace('[binaries]', '[binaries]\nvalac = \'{}\''.format(valac_path))
                 cross_file.write_text(content)
                 log(f"  Added valac to cross file", "OK")
+                log(f"  Using system valac: {valac_path}", "INFO")
             else:
                 log(f"  Cross file has no [binaries] section", "WARN")
         else:
