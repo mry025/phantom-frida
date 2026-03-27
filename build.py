@@ -228,6 +228,34 @@ def rename_frida_files(frida_dir: Path, custom_name: str):
         log(f"  Renamed {renamed_count} files on disk", "OK")
 
 
+def get_core_dir(frida_dir: Path) -> Path:
+    """Get frida-core directory, handling both 16.x and 17.x layouts."""
+    # Try Frida 17.x layout first (subprojects/frida-core)
+    core_dir = frida_dir / "subprojects" / "frida-core"
+    if core_dir.exists():
+        return core_dir
+    # Fall back to Frida 16.x layout (frida-core directly)
+    core_dir = frida_dir / "frida-core"
+    if core_dir.exists():
+        return core_dir
+    # Default to 17.x layout
+    return frida_dir / "subprojects" / "frida-core"
+
+
+def get_gum_dir(frida_dir: Path) -> Path:
+    """Get frida-gum directory, handling both 16.x and 17.x layouts."""
+    # Try Frida 17.x layout first (subprojects/frida-gum)
+    gum_dir = frida_dir / "subprojects" / "frida-gum"
+    if gum_dir.exists():
+        return gum_dir
+    # Fall back to Frida 16.x layout (frida-gum directly)
+    gum_dir = frida_dir / "frida-gum"
+    if gum_dir.exists():
+        return gum_dir
+    # Default to 17.x layout
+    return frida_dir / "subprojects" / "frida-gum"
+
+
 def rebuild_helper_dex(frida_dir: Path, custom_name: str):
     """Rebuild the Android helper DEX with renamed Java package.
 
@@ -236,7 +264,8 @@ def rebuild_helper_dex(frida_dir: Path, custom_name: str):
     1. The DEX string table doesn't contain 'frida' (binary sweep safe)
     2. The class name matches what the renamed Vala code expects
     """
-    helper_dir = frida_dir / "subprojects" / "frida-core" / "src" / "android-helper"
+    core_dir = get_core_dir(frida_dir)
+    helper_dir = core_dir / "src" / "android-helper"
     old_pkg_dir = helper_dir / "re" / "frida"
     new_pkg_dir = helper_dir / "re" / custom_name
     java_file = old_pkg_dir / "Helper.java"
@@ -434,8 +463,10 @@ def apply_targeted_patches(frida_dir: Path, custom_name: str, frida_major: int):
     log("=" * 60, "HEADER")
 
     cap_name = custom_name[0].upper() + custom_name[1:]
-    core_dir = frida_dir / "subprojects" / "frida-core"
-    gum_dir = frida_dir / "subprojects" / "frida-gum"
+
+    # Get correct directories for Frida version
+    core_dir = get_core_dir(frida_dir)
+    gum_dir = get_gum_dir(frida_dir)
 
     # --- memfd_create: hide agent name in /proc/pid/fd ---
     memfd_cfg = MEMFD_PATCHES.get(frida_major, MEMFD_PATCHES[17])
@@ -502,19 +533,23 @@ def apply_extended_patches(frida_dir: Path, custom_name: str, port: int | None):
     log("=" * 60, "HEADER")
 
     cap_name = custom_name[0].upper() + custom_name[1:]
+    core_dir = get_core_dir(frida_dir)
 
     # --- Port change ---
     if port and port != 27042:
-        port_patches = get_port_patches(port)
-        for patch in port_patches:
-            for fpath in patch["files"]:
-                full_path = frida_dir / fpath
-                if full_path.exists():
-                    count = replace_in_file(full_path, patch["pattern"], patch["replacement"])
-                    if count:
-                        log(f"  Port: {patch['description']} in {Path(fpath).name} ({count})", "OK")
+        # Port patch files (relative to core_dir for 16.x, or subprojects/frida-core for 17.x)
+        port_files = [
+            core_dir / "lib" / "interfaces" / "session.vala",
+            core_dir / "src" / "droidy" / "droidy-client.vala",
+            core_dir / "server" / "server.vala",
+        ]
+        for fpath in port_files:
+            if fpath.exists():
+                count = replace_in_file(fpath, "27042", str(port))
+                if count:
+                    log(f"  Port: 27042 -> {port} in {fpath.name} ({count})", "OK")
         # Also do a global sweep for the port number in less obvious places
-        count = replace_in_tree(frida_dir / "subprojects" / "frida-core", "27042", str(port))
+        count = replace_in_tree(core_dir, "27042", str(port))
         if count:
             log(f"  Port: global sweep found {count} more occurrences", "OK")
 
@@ -546,7 +581,7 @@ def apply_stability_fixes(frida_dir: Path, frida_major: int):
     """Apply optional stability/crash fixes."""
     log("Applying stability fixes...", "STEP")
 
-    core_dir = frida_dir / "subprojects" / "frida-core"
+    core_dir = get_core_dir(frida_dir)
 
     if frida_major >= 17:
         patches = get_stability_patches_17(frida_dir)
@@ -711,13 +746,20 @@ def collect_artifacts(frida_dir: Path, arch: str, custom_name: str,
     arch_short = arch.replace("android-", "")
 
     def find_artifact(subdir: str, patterns: list[str]) -> Path | None:
-        base = frida_dir / "build" / "subprojects" / "frida-core" / subdir
-        for pattern in patterns:
-            candidate = base / pattern
-            if candidate.exists():
-                return candidate
-        # List directory for debugging
-        if base.exists():
+        # Frida 16.x: build/frida-core/subdir
+        # Frida 17.x: build/subprojects/frida-core/subdir
+        bases = [
+            frida_dir / "build" / "subprojects" / "frida-core" / subdir,  # 17.x
+            frida_dir / "build" / "frida-core" / subdir,  # 16.x
+        ]
+        for base in bases:
+            if not base.exists():
+                continue
+            for pattern in patterns:
+                candidate = base / pattern
+                if candidate.exists():
+                    return candidate
+            # List directory for debugging
             log(f"    Looking in {base}:", "INFO")
             for f in sorted(base.iterdir()):
                 if f.is_file() and f.stat().st_size > 1000:
