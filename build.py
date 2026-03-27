@@ -1123,7 +1123,7 @@ fix_cross_file() {{
             sed -i "/^\\[binaries\\]/a valac = '$wrapper_path'" "$cross_file"
         fi
     fi
-}
+}}
 
 # Fix cross file before starting
 fix_cross_file
