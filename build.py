@@ -829,8 +829,8 @@ def configure_arch(frida_dir: Path, arch: str, ndk_path: Path):
         log(f"  Checking generated cross file: {cross_file}", "INFO")
         content = cross_file.read_text()
         
-        # Use system valac directly
-        valac_path = "/usr/bin/valac"
+        # Use valac wrapper
+        valac_path = str(build_dir / f"frida-{arch}-valac")
         
         if 'valac' not in content:
             # Add valac to [binaries] section
@@ -838,7 +838,7 @@ def configure_arch(frida_dir: Path, arch: str, ndk_path: Path):
                 content = content.replace('[binaries]', '[binaries]\nvalac = \'{}\''.format(valac_path))
                 cross_file.write_text(content)
                 log(f"  Added valac to cross file", "OK")
-                log(f"  Using system valac: {valac_path}", "INFO")
+                log(f"  Using valac wrapper: {valac_path}", "INFO")
             else:
                 log(f"  Cross file has no [binaries] section", "WARN")
         else:
@@ -865,9 +865,8 @@ def ensure_cross_file_valac(frida_dir: Path, arch: str, force: bool = False):
         log(f"  Cross file not found yet: {cross_file}", "WARN")
         return False
     
-    # Use system valac directly, not a wrapper
-    # This avoids the "Unknown compiler" error when wrapper path changes
-    valac_path = "/usr/bin/valac"
+    # Use valac wrapper, which calls system valac
+    valac_path = str(build_dir / f"frida-{arch}-valac")
     
     content = cross_file.read_text()
     
@@ -886,7 +885,7 @@ def ensure_cross_file_valac(frida_dir: Path, arch: str, force: bool = False):
             content = content.replace('[binaries]', '[binaries]\nvalac = \'{}\''.format(valac_path))
             cross_file.write_text(content)
             log(f"  {'Updated' if has_valac else 'Added'} valac in cross file: {cross_file}", "OK")
-            log(f"  Using system valac: {valac_path}", "INFO")
+            log(f"  Using valac wrapper: {valac_path}", "INFO")
             return True
         else:
             log(f"  Cross file has no [binaries] section", "WARN")
@@ -979,14 +978,14 @@ def build_frida(frida_dir: Path, ndk_path: Path, arch: str = None):
                 }
                 cpu_family, abi = arch_to_cpu.get(arch, ("aarch64", "arm64-v8a"))
                 
-                # Use system valac directly - no wrapper needed
+                # Use valac wrapper - this ensures compatibility with Frida's build system
                 cross_content = f"""[binaries]
 c = '{build_dir}/frida-{arch}-clang'
 cpp = '{build_dir}/frida-{arch}-clang++'
 ar = '{build_dir}/frida-{arch}-ar'
 strip = '{build_dir}/frida-{arch}-strip'
 pkgconfig = '{build_dir}/frida-{arch}-pkg-config'
-valac = '/usr/bin/valac'
+valac = '{build_dir}/frida-{arch}-valac'
 
 [properties]
 
@@ -997,8 +996,8 @@ cpu = '{cpu_family}'
 endian = 'little'
 """
                 cross_file.write_text(cross_content)
-                log(f"  Created cross file with valac config", "OK")
-                log(f"  Using system valac: /usr/bin/valac", "INFO")
+                log(f"  Created cross file with valac wrapper", "OK")
+                log(f"  Valac wrapper: {build_dir}/frida-{arch}-valac", "INFO")
                 log(f"  Cross file content:", "INFO")
                 for i, line in enumerate(cross_content.split('\n'), 1):
                     log(f"    {i:3}: {line}", "INFO")
@@ -1009,6 +1008,18 @@ endian = 'little'
             
             # Create a modified make command that ensures valac is in cross file
             log("  Starting make with valac workaround...", "INFO")
+            
+            # Create valac wrapper scripts in the build directory
+            # These need to exist before Frida's Makefile generates cross files
+            log("  Creating valac wrappers for all architectures...", "INFO")
+            for wrapper_arch in ["android-arm", "android-arm64", "android-x86", "android-x86_64"]:
+                wrapper_path = build_dir / f"frida-{wrapper_arch}-valac"
+                wrapper_content = """#!/bin/sh
+exec /usr/bin/valac "$@"
+"""
+                wrapper_path.write_text(wrapper_content)
+                wrapper_path.chmod(0o755)
+            log(f"  Created valac wrappers in {build_dir}", "OK")
             
             # Create a simple wrapper script that just fixes ninja targets
             make_wrapper = build_dir / "make-with-valac-fix.sh"
