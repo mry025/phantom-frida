@@ -478,6 +478,7 @@ def apply_targeted_patches(frida_dir: Path, custom_name: str, frida_major: int):
         "core_meson": core_dir / "meson.build",
         "gadget_meson": core_dir / "lib" / "gadget" / "meson.build",
         "agent_meson": core_dir / "lib" / "agent" / "meson.build",
+        "makefile_linux": core_dir / "Makefile.linux.mk",
     }
 
     for target_name, target_file in targets.items():
