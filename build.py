@@ -1115,7 +1115,6 @@ exec ninja -C "$build_dir" "${fixed_targets[@]}"
             
             # Add build directory to PATH so our ninja wrapper is found first
             # This ensures that when Frida's Makefile calls ninja, it uses our wrapper
-            import os
             original_path = os.environ.get("PATH", "")
             os.environ["PATH"] = f"{str(build_dir)}:{original_path}"
             
