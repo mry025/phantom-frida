@@ -1,21 +1,19 @@
 """
 Patch definitions for Custom Frida Builder.
 
-Verified against Frida 17.7.2 source code (February 2026).
+Verified against Frida 15.2.2, 16.x and 17.x source code (February 2026).
 Extended beyond ajeossida with additional anti-detection techniques.
 
 Patch categories:
   [A] Ajeossida-compatible  — proven patches from hackcatml's approach
   [E] Extended               — new techniques not in ajeossida
-  [V] Version-specific       — differs between Frida 16.x and 17.x
+  [V] Version-specific       — differs between Frida 15.x, 16.x and 17.x
 
-Source verification notes (17.7.2):
-  - g_set_prgname("frida") does NOT exist — removed
+Source verification notes:
+  - Frida 15.x/16.x: memfd_create is in src/linux/frida-helper-backend.vala
+  - Frida 17.x: memfd_create moved to lib/base/linux.vala
+  - g_set_prgname("frida") does NOT exist in any version — removed
   - frida-gadget-tcp/unix do NOT exist — removed
-  - memfd_create is in lib/base/linux.vala, NOT frida-helper-backend.vala
-  - SELinux labels are in linjector.vala, NOT frida-helper-backend.vala
-  - cloak.vala uses GOT slot patching, NOT Gum.Interceptor
-  - gumprocess-linux.c uses entry->name, NOT details.name
 """
 
 from pathlib import Path
@@ -188,10 +186,16 @@ def get_targeted_patches(name: str, cap_name: str, target: str) -> list[tuple[st
 
 
 # ============================================================================
-# [V] VERSION-SPECIFIC PATCHES — differ between Frida 16.x and 17.x
+# [V] VERSION-SPECIFIC PATCHES — differ between Frida 15.x, 16.x and 17.x
 # ============================================================================
 
 MEMFD_PATCHES = {
+    # Frida 15.x: memfd_create in frida-helper-backend.vala (similar to 16.x)
+    15: {
+        "file": "src/linux/frida-helper-backend.vala",
+        "old": "return Linux.syscall (SysCall.memfd_create, name, flags);",
+        "new": 'return Linux.syscall (SysCall.memfd_create, "jit-cache", flags);',
+    },
     # Frida 16.x: memfd_create in frida-helper-backend.vala
     16: {
         "file": "src/linux/frida-helper-backend.vala",
@@ -459,4 +463,9 @@ Detection vectors addressed:
 14. Binary string residuals: Post-compilation sweep for frida/Frida/FRIDA
 15. Build config defines:    FRIDA_HELPER_PATH, FRIDA_AGENT_PATH -- renamed
 16. Asset directory:         libdir/frida -- libdir/custom
+
+Version support:
+  - Frida 15.2.2: Verified (memfd_create in frida-helper-backend.vala)
+  - Frida 16.x:   Verified (memfd_create in frida-helper-backend.vala)
+  - Frida 17.x:   Verified (memfd_create in lib/base/linux.vala)
 """
