@@ -865,8 +865,8 @@ def ensure_cross_file_valac(frida_dir: Path, arch: str, force: bool = False):
         log(f"  Cross file not found yet: {cross_file}", "WARN")
         return False
     
-    # Use valac wrapper, which calls system valac
-    valac_path = str(build_dir / f"frida-{arch}-valac")
+    # Use valac directly from PATH - more reliable than wrapper paths
+    valac_cmd = 'valac'
     
     content = cross_file.read_text()
     
@@ -882,10 +882,10 @@ def ensure_cross_file_valac(frida_dir: Path, arch: str, force: bool = False):
                 new_lines = [l for l in lines if not l.strip().startswith('valac')]
                 content = '\n'.join(new_lines)
             
-            content = content.replace('[binaries]', '[binaries]\nvalac = \'{}\''.format(valac_path))
+            content = content.replace('[binaries]', '[binaries]\nvalac = \'{}\''.format(valac_cmd))
             cross_file.write_text(content)
             log(f"  {'Updated' if has_valac else 'Added'} valac in cross file: {cross_file}", "OK")
-            log(f"  Using valac wrapper: {valac_path}", "INFO")
+            log(f"  Using valac from PATH: {valac_cmd}", "INFO")
             return True
         else:
             log(f"  Cross file has no [binaries] section", "WARN")
@@ -990,14 +990,16 @@ exec /usr/bin/valac "$@"
                 }
                 cpu_family, abi = arch_to_cpu.get(arch, ("aarch64", "arm64-v8a"))
                 
-                # Use valac wrapper - this ensures compatibility with Frida's build system
+                # Use valac directly from PATH - this is more reliable than wrapper paths
+                # Frida's Makefile may regenerate cross files with different paths
+                # By using 'valac' from PATH, we avoid path resolution issues
                 cross_content = f"""[binaries]
 c = '{build_dir}/frida-{arch}-clang'
 cpp = '{build_dir}/frida-{arch}-clang++'
 ar = '{build_dir}/frida-{arch}-ar'
 strip = '{build_dir}/frida-{arch}-strip'
 pkgconfig = '{build_dir}/frida-{arch}-pkg-config'
-valac = '{build_dir}/frida-{arch}-valac'
+valac = 'valac'
 
 [properties]
 
