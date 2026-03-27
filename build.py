@@ -694,23 +694,75 @@ def apply_binary_patches(binary_path: Path, custom_name: str, extended: bool = F
 # Build
 # ============================================================================
 
-def configure_arch(frida_dir: Path, arch: str, ndk_path: Path):
+def configure_arch(frida_dir: Path, arch: str, ndk_path: Path, frida_major: int):
     log(f"Configuring for {arch}...", "STEP")
-    run(
-        f"./configure --host={arch}",
-        cwd=str(frida_dir),
-        env={"ANDROID_NDK_ROOT": str(ndk_path)},
-    )
+    
+    if frida_major >= 16:
+        # Frida 16.x and 17.x use Meson build system
+        # Set up the cross-file for Android
+        cross_file = frida_dir / "android-cross-file.ini"
+        arch_short = arch.replace("android-", "")
+        
+        # Map architecture names
+        arch_map = {
+            "android-arm64": "aarch64",
+            "android-arm": "arm",
+            "android-x86_64": "x86_64",
+            "android-x86": "x86",
+        }
+        target_arch = arch_map.get(arch_short, arch_short)
+        
+        cross_content = f"""[binaries]
+c = 'clang'
+cpp = 'clang++'
+ar = 'llvm-ar'
+strip = 'llvm-strip'
+
+[built-in options]
+c_args = ['--target={target_arch}-linux-android']
+cpp_args = ['--target={target_arch}-linux-android']
+
+[host_machine]
+system = 'android'
+cpu_family = '{target_arch}'
+cpu = '{target_arch}'
+endian = 'little'
+"""
+        cross_file.write_text(cross_content)
+        
+        run(
+            f"meson setup build --cross-file {cross_file} --prefix /usr "
+            f"-Dlibdir=lib -Dbuildtype=release",
+            cwd=str(frida_dir),
+            env={"ANDROID_NDK_ROOT": str(ndk_path)},
+        )
+    else:
+        # Frida 15.x and earlier use Autotools
+        run(
+            f"./configure --host={arch}",
+            cwd=str(frida_dir),
+            env={"ANDROID_NDK_ROOT": str(ndk_path)},
+        )
 
 
-def build_frida(frida_dir: Path, ndk_path: Path):
+def build_frida(frida_dir: Path, ndk_path: Path, frida_major: int):
     cpus = os.cpu_count() or 4
     log(f"Building ({cpus} threads)...", "STEP")
-    run(
-        f"make -j{cpus}",
-        cwd=str(frida_dir),
-        env={"ANDROID_NDK_ROOT": str(ndk_path)},
-    )
+    
+    if frida_major >= 16:
+        # Frida 16.x and 17.x use Meson build system
+        run(
+            f"meson compile -C build -j{cpus}",
+            cwd=str(frida_dir),
+            env={"ANDROID_NDK_ROOT": str(ndk_path)},
+        )
+    else:
+        # Frida 15.x and earlier use Autotools with make
+        run(
+            f"make -j{cpus}",
+            cwd=str(frida_dir),
+            env={"ANDROID_NDK_ROOT": str(ndk_path)},
+        )
 
 
 # ============================================================================
@@ -962,18 +1014,18 @@ Detection vectors covered:
         log("=" * 60, "HEADER")
 
         # Configure
-        configure_arch(frida_dir, arch, ndk_path)
+        configure_arch(frida_dir, arch, ndk_path, frida_major)
 
         # First build
         log("First build...", "STEP")
-        build_frida(frida_dir, ndk_path)
+        build_frida(frida_dir, ndk_path, frida_major)
 
         # Post-build patches (frida_agent_main appears only after first build)
         apply_post_build_patches(frida_dir, custom_name)
 
         # Second build (incremental — only recompiles files with patched symbol)
         log("Second build (incremental)...", "STEP")
-        build_frida(frida_dir, ndk_path)
+        build_frida(frida_dir, ndk_path, frida_major)
 
         # Collect and binary-patch artifacts
         collect_artifacts(frida_dir, arch, custom_name, version, output_dir, args.extended)
