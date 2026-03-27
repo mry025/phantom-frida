@@ -1024,6 +1024,7 @@ endian = 'little'
             log("  Starting make with valac workaround...", "INFO")
             
             # Create symlinks in /usr/bin for valac wrappers as a global fallback
+            # This ensures that no matter what path Frida's Makefile uses, the wrapper will exist
             log("  Creating system-wide valac wrapper symlinks...", "INFO")
             for wrapper_arch in ["android-arm", "android-arm64", "android-x86", "android-x86_64"]:
                 wrapper_name = f"frida-{wrapper_arch}-valac"
