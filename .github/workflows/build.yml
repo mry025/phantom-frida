@@ -56,23 +56,22 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential curl git python3 unzip
+          sudo apt-get install -y build-essential curl git python3 unzip libglib2.0-dev libglib2.0-dev-bin valac
 
-      # Cache NDK (~1.5 GB) — saves ~3 min on subsequent runs
       - name: Cache NDK
         uses: actions/cache@v4
         id: ndk-cache
         with:
-          path: build/android-ndk-r29
-          key: ndk-r29-linux
+          path: build/android-ndk-r24
+          key: ndk-r24-linux
 
       - name: Download NDK
         if: steps.ndk-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p build
-          curl -L -o build/android-ndk-r29-linux.zip \
-            https://dl.google.com/android/repository/android-ndk-r29-linux.zip
-          cd build && unzip -q android-ndk-r29-linux.zip && rm android-ndk-r29-linux.zip
+          curl -L -o build/android-ndk-r24-linux.zip \
+            https://dl.google.com/android/repository/android-ndk-r24-linux.zip
+          cd build && unzip -q android-ndk-r24-linux.zip && rm android-ndk-r24-linux.zip
 
       # Cache Frida source tree — saves ~5 min clone time
       - name: Cache Frida source
@@ -105,7 +104,7 @@ jobs:
           CMD="python3 build.py --version ${{ inputs.frida_version }}"
           CMD="$CMD --name ${{ inputs.custom_name }}"
           CMD="$CMD --arch ${{ inputs.arch }}"
-          CMD="$CMD --skip-clone --ndk-path build/android-ndk-r29"
+          CMD="$CMD --skip-clone --ndk-path build/android-ndk-r24"
           CMD="$CMD --verify"
 
           if [ -n "${{ inputs.port }}" ]; then
@@ -126,10 +125,26 @@ jobs:
       - name: Apply patches and build
         run: ${{ steps.cmd.outputs.cmd }}
 
+      - name: Debug - List build directory structure
+        if: always()
+        run: |
+          echo "=== Build directory structure ==="
+          if [ -d "build/frida/build" ]; then
+            echo "Build output directory exists"
+            find build/frida/build -type f -name "*.so" -o -name "*-server" -o -name "*-agent" 2>/dev/null | head -20 || true
+            echo ""
+            echo "=== Files in build/subprojects/frida-core/ (if exists) ==="
+            if [ -d "build/frida/build/subprojects/frida-core" ]; then
+              find build/frida/build/subprojects/frida-core -type f -size +10k 2>/dev/null | head -30 || true
+            fi
+          else
+            echo "Build output directory not found"
+          fi
+
       - name: List artifacts
         run: |
           echo "=== Build artifacts ==="
-          ls -lh output/
+          ls -lh output/ || echo "Output directory empty or not found"
           echo ""
           echo "=== Binary verification ==="
           for f in output/*; do
