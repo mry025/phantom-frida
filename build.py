@@ -1026,19 +1026,19 @@ endian = 'little'
             for wrapper_arch in ["android-arm", "android-arm64", "android-x86", "android-x86_64"]:
                 wrapper_name = f"frida-{wrapper_arch}-valac"
                 wrapper_link = Path(f"/usr/bin/{wrapper_name}")
-                target = "/usr/bin/valac"
+                symlink_target = "/usr/bin/valac"  # Use different variable name to avoid conflict
                 
                 # Use sudo to create symlink (will work in GitHub Actions with sudo privileges)
                 try:
                     import subprocess
                     result = subprocess.run(
-                        ["sudo", "ln", "-sf", target, str(wrapper_link)],
+                        ["sudo", "ln", "-sf", symlink_target, str(wrapper_link)],
                         capture_output=True,
                         text=True,
                         timeout=10
                     )
                     if result.returncode == 0:
-                        log(f"  Created symlink: {wrapper_name} -> {target}", "OK")
+                        log(f"  Created symlink: {wrapper_name} -> {symlink_target}", "OK")
                     else:
                         log(f"  Failed to create symlink: {result.stderr.strip()}", "WARN")
                 except Exception as e:
