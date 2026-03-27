@@ -1070,15 +1070,10 @@ endian = 'little'
             
             # Create a simple wrapper script that just fixes ninja targets
             make_wrapper = build_dir / "make-with-valac-fix.sh"
-            make_wrapper_content = f"""#!/bin/bash
-# Wrapper script to fix ninja target names for Frida 15.x
-
-# Check if we need to override ninja
-if command -v ninja &> /dev/null; then
-    # Create a ninja wrapper in the build directory
-    ninja_wrapper="{str(build_dir)}/ninja-wrapper.sh"
-    cat > "$ninja_wrapper" << 'NINJA_WRAPPER_EOF'
-#!/bin/bash
+            ninja_wrapper = build_dir / "ninja-wrapper.sh"
+            
+            # Create ninja wrapper first
+            ninja_wrapper_content = """#!/bin/bash
 # Ninja wrapper to fix target names
 
 # Parse arguments
@@ -1100,7 +1095,7 @@ done
 
 # Fix target names
 fixed_targets=()
-for target in "${{targets[@]}}"; do
+for target in "${targets[@]}"; do
     if [[ "$target" == lib/agent/*.so ]]; then
         # Extract target name from path
         target_name=$(basename "$target" .so)
@@ -1112,14 +1107,21 @@ for target in "${{targets[@]}}"; do
 done
 
 # Run ninja with fixed targets
-exec ninja -C "$build_dir" "${{fixed_targets[@]}}"
-NINJA_WRAPPER_EOF
-    chmod +x "$ninja_wrapper"
-    echo "[FIX] Created ninja wrapper: $ninja_wrapper"
-    
-    # Add build directory to PATH so our ninja wrapper is found first
-    export PATH="{str(build_dir)}:$PATH"
-fi
+exec ninja -C "$build_dir" "${fixed_targets[@]}"
+"""
+            ninja_wrapper.write_text(ninja_wrapper_content)
+            ninja_wrapper.chmod(0o755)
+            log(f"  Created ninja wrapper: {ninja_wrapper}", "INFO")
+            
+            # Add build directory to PATH so our ninja wrapper is found first
+            # This ensures that when Frida's Makefile calls ninja, it uses our wrapper
+            import os
+            original_path = os.environ.get("PATH", "")
+            os.environ["PATH"] = f"{str(build_dir)}:{original_path}"
+            
+            # Create make wrapper
+            make_wrapper_content = f"""#!/bin/bash
+# Wrapper script to fix ninja target names for Frida 15.x
 
 # Run make with original arguments
 exec make "$@"
@@ -1132,7 +1134,7 @@ exec make "$@"
             run(
                 f"{make_wrapper} -j{cpus} {target}",
                 cwd=str(frida_dir),
-                env={"ANDROID_NDK_ROOT": str(ndk_path)},
+                env={"ANDROID_NDK_ROOT": str(ndk_path), "PATH": os.environ["PATH"]},
             )
         else:
             log("  No Makefile or meson build found, cannot build", "ERROR")
