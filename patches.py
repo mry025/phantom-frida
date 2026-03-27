@@ -184,6 +184,15 @@ def get_targeted_patches(name: str, cap_name: str, target: str) -> list[tuple[st
             ("'frida-agent-universal'", f"'{name}-agent-universal'"),
         ]
 
+    elif target == "makefile_linux":
+        # subprojects/frida-core/Makefile.linux.mk
+        # Contains hardcoded paths like: lib/agent/frida-agent.so
+        # These are ninja build targets that must match meson output names
+        return [
+            ("lib/agent/frida-agent.so", f"lib/agent/{name}-agent.so"),
+            ("lib/agent/libfrida-agent.so", f"lib/agent/lib{name}-agent.so"),
+        ]
+
     return []
 
 
