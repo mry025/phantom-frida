@@ -1041,6 +1041,29 @@ endian = 'little'
             else:
                 log(f"  Makefile not found at {makefile_path}, skipping patch", "WARN")
             
+            # Fix Frida's environment files to use relative valac path
+            # Frida's Makefile uses .rc files that may set VALAC with absolute paths
+            log("  Patching Frida environment files to use relative valac paths...", "INFO")
+            env_files = [
+                frida_dir / "build" / "frida-env-android-arm.rc",
+                frida_dir / "build" / "frida-env-android-arm64.rc",
+                frida_dir / "build" / "frida-env-android-x86.rc",
+                frida_dir / "build" / "frida-env-android-x86_64.rc",
+            ]
+            for env_file in env_files:
+                if env_file.exists():
+                    try:
+                        content = env_file.read_text()
+                        # Replace patterns like export VALAC='/path/to/frida-android-arm64-valac'
+                        import re
+                        content = re.sub(r"export\s+VALAC=['\"][^'\"]+frida-[^'\"]+valac['\"]", "export VALAC='valac'", content)
+                        # Also replace patterns like VALAC='/path/to/frida-android-arm64-valac'
+                        content = re.sub(r"VALAC=['\"][^'\"]+frida-[^'\"]+valac['\"]", "VALAC='valac'", content)
+                        env_file.write_text(content)
+                        log(f"  Patched {env_file.name} to use relative valac paths", "OK")
+                    except Exception as e:
+                        log(f"  Could not patch {env_file.name}: {e}", "WARN")
+            
             # Create a modified make command that ensures valac is in cross file
             log("  Starting make with valac workaround...", "INFO")
             
