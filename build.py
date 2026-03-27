@@ -961,9 +961,21 @@ def build_frida(frida_dir: Path, ndk_path: Path, arch: str = None):
             
             # For Makefile builds, the cross file is generated during make execution
             # We need to create the cross file manually with valac configured
-            build_dir = frida_dir / "build"
+            # IMPORTANT: Frida's Makefile expects cross files in frida_dir/build/, not build_dir/
+            build_dir = frida_dir / "build"  # Use Frida's build directory, not nested one
             if not build_dir.exists():
                 build_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Create valac wrappers in the correct directory
+            log("  Creating valac wrappers in Frida build directory...", "INFO")
+            for wrapper_arch in ["android-arm", "android-arm64", "android-x86", "android-x86_64"]:
+                wrapper_path = build_dir / f"frida-{wrapper_arch}-valac"
+                wrapper_content = """#!/bin/sh
+exec /usr/bin/valac "$@"
+"""
+                wrapper_path.write_text(wrapper_content)
+                wrapper_path.chmod(0o755)
+            log(f"  Created valac wrappers in {build_dir}", "OK")
             
             # Create a minimal cross file if it doesn't exist
             cross_file = build_dir / f"frida-{arch}.txt"
@@ -1009,17 +1021,28 @@ endian = 'little'
             # Create a modified make command that ensures valac is in cross file
             log("  Starting make with valac workaround...", "INFO")
             
-            # Create valac wrapper scripts in the build directory
-            # These need to exist before Frida's Makefile generates cross files
-            log("  Creating valac wrappers for all architectures...", "INFO")
+            # Create symlinks in /usr/bin for valac wrappers as a global fallback
+            log("  Creating system-wide valac wrapper symlinks...", "INFO")
             for wrapper_arch in ["android-arm", "android-arm64", "android-x86", "android-x86_64"]:
-                wrapper_path = build_dir / f"frida-{wrapper_arch}-valac"
-                wrapper_content = """#!/bin/sh
-exec /usr/bin/valac "$@"
-"""
-                wrapper_path.write_text(wrapper_content)
-                wrapper_path.chmod(0o755)
-            log(f"  Created valac wrappers in {build_dir}", "OK")
+                wrapper_name = f"frida-{wrapper_arch}-valac"
+                wrapper_link = Path(f"/usr/bin/{wrapper_name}")
+                target = "/usr/bin/valac"
+                
+                # Use sudo to create symlink (will work in GitHub Actions with sudo privileges)
+                try:
+                    import subprocess
+                    result = subprocess.run(
+                        ["sudo", "ln", "-sf", target, str(wrapper_link)],
+                        capture_output=True,
+                        text=True,
+                        timeout=10
+                    )
+                    if result.returncode == 0:
+                        log(f"  Created symlink: {wrapper_name} -> {target}", "OK")
+                    else:
+                        log(f"  Failed to create symlink: {result.stderr.strip()}", "WARN")
+                except Exception as e:
+                    log(f"  Could not create symlink: {e}", "WARN")
             
             # Create a simple wrapper script that just fixes ninja targets
             make_wrapper = build_dir / "make-with-valac-fix.sh"
